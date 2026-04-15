@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-FTP XML → CSV pipeline - Vax
-- Connects to FTP (ftplib, stdlib)
-- Supports multiple ingestion jobs: each job targets a different file pattern
-  in the same FTP folder (see FEED_JOBS below)
+SFTP XML → CSV pipeline - Vax
+- Connects to SFTP (Paramiko)
+- Supports multiple ingestion jobs: each job targets a different folder/file
+  on the same SFTP server (see FEED_JOBS below)
 - For each job:
-    - Finds source file by wildcard (e.g., stock-*.xml), picks latest by mtime
+    - Finds source file by wildcard (e.g., stock-*.xml), picks latest or first
     - Downloads locally (temp)
     - Streams XML and maps sku → qty (sums if sku appears more than once)
     - Writes a CSV (sku, qty) with a timestamp appended to the filename
@@ -32,11 +32,10 @@ Performance notes:
 Timestamp format: YYYY_MM_DD_MI_SS  →  strftime: "%Y_%m_%d_%M_%S"
 
 Requirements:
-    No third-party packages needed (ftplib is part of the Python stdlib)
+    pip3 install paramiko
 """
 
 import os
-import ftplib
 import fnmatch
 import tempfile
 import logging
@@ -45,6 +44,8 @@ from datetime import datetime
 import xml.etree.ElementTree as ET
 import csv
 from collections import defaultdict
+
+import paramiko
 
 # -----------------------
 # CONFIGURABLE CONSTANTS
@@ -59,29 +60,29 @@ def _require_env(name: Vax) -> Vax:
         raise SystemExit(f"ERROR: required environment variable '{name}' is not set.")
     return val
 
-# FTP connection — set these as GitHub Secrets (or .env locally)
-FTP_HOST = _require_env("VAX_FTP_HOST")
-FTP_PORT = int(os.getenv("VAX_FTP_PORT", "21"))   # optional, defaults to 21
-FTP_USER = _require_env("VAX_FTP_USER")
-FTP_PASS = _require_env("VAX_FTP_PASS")
+# SFTP connection — set these as GitHub Secrets (or .env locally)
+SFTP_HOST = _require_env("VAX_SFTP_HOST")
+SFTP_PORT = int(os.getenv("VAX_SFTP_PORT", "22"))   # optional, defaults to 22
+SFTP_USER = _require_env("VAX_SFTP_USER")
+SFTP_PASS = _require_env("VAX_SFTP_PASS")
 
 # -----------------------------------------------------------------------
 # FEED JOBS
-# All jobs read from the same FTP folder (FTP_SRC_DIR).
+# All jobs read from the same SFTP folder (SFTP_SRC_DIR).
 # Each entry picks a different file pattern within that folder.
 #
 # Fields per job:
 #   src_glob        - filename pattern (wildcards ok, e.g. "stock-34-*.xml")
 #   result_basename - base name for the output CSV (timestamp will be appended)
 # -----------------------------------------------------------------------
-FTP_SRC_DIR = "/feeds/vax"
+SFTP_SRC_DIR = "/Magento/Stock"
 
 FEED_JOBS = [
     {"src_glob": "stock-34-*.xml", "result_basename": "Stock_34"},
     # {"src_glob": "stock-45-*.xml", "result_basename": "Stock_45"},
 ]
 
-# Subfolder name within FTP_SRC_DIR where processed XMLs are archived
+# Subfolder name within each src_dir where processed XMLs are archived
 TRANSFORMED_SUBFOLDER = "TransformedXML"
 
 TIMESTAMP_FORMAT = "%Y_%m_%d_%M_%S"  # YYYY_MM_DD_MI_SS
@@ -93,18 +94,26 @@ logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(mes
 
 
 # -----------------------
-# FTP HELPERS
+# SFTP HELPERS
 # -----------------------
 
-def _connect() -> ftplib.FTP:
-    """Connect to FTP server with password authentication."""
-    logging.info("Connecting to FTP %s:%s as %s", FTP_HOST, FTP_PORT, FTP_USER)
-    ftp = ftplib.FTP()
-    ftp.connect(FTP_HOST, FTP_PORT, timeout=60)
-    ftp.login(FTP_USER, FTP_PASS)
-    ftp.set_pasv(True)
-    logging.info("Connected to FTP")
-    return ftp
+def _connect():
+    """Connect to SFTP using Paramiko with password authentication."""
+    logging.info("Connecting to SFTP %s:%s as %s", SFTP_HOST, SFTP_PORT, SFTP_USER)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        hostname=SFTP_HOST,
+        port=SFTP_PORT,
+        username=SFTP_USER,
+        password=SFTP_PASS,
+        look_for_keys=False,
+        allow_agent=False,
+        timeout=60,
+    )
+    sftp = client.open_sftp()
+    logging.info("Connected to SFTP")
+    return client, sftp
 
 
 def _normalize_dir(path: str) -> str:
@@ -117,8 +126,8 @@ def _normalize_dir(path: str) -> str:
     return path
 
 
-def _ensure_dir(ftp: ftplib.FTP, path: str) -> None:
-    """Ensure directory exists on FTP (recursive mkdir)."""
+def _ensure_dir(sftp: paramiko.SFTPClient, path: str) -> None:
+    """Ensure directory exists on SFTP (recursive mkdir)."""
     path = _normalize_dir(path)
     if path == "/":
         return
@@ -127,34 +136,20 @@ def _ensure_dir(ftp: ftplib.FTP, path: str) -> None:
     for p in parts:
         current = current.rstrip("/") + "/" + p
         try:
-            ftp.cwd(current)
-        except ftplib.error_perm:
-            ftp.mkd(current)
-    ftp.cwd("/")
+            sftp.stat(current)
+        except IOError:
+            sftp.mkdir(current)
 
 
-def _list_matching(ftp: ftplib.FTP, directory: str, pattern: str):
+def _list_matching(sftp: paramiko.SFTPClient, directory: str, pattern: str):
     """Return list of (name, mtime) for entries in directory matching pattern."""
     directory = _normalize_dir(directory)
-    results = []
-    try:
-        # MLSD provides filenames + metadata including modify time
-        for name, facts in ftp.mlsd(directory):
-            if fnmatch.fnmatch(name, pattern):
-                mtime = 0
-                if "modify" in facts:
-                    try:
-                        mtime = datetime.strptime(facts["modify"], "%Y%m%d%H%M%S").timestamp()
-                    except ValueError:
-                        pass
-                results.append((name, mtime))
-    except ftplib.error_perm:
-        # Fallback for servers that don't support MLSD — no mtime available
-        for name in ftp.nlst(directory):
-            basename = name.split("/")[-1]
-            if fnmatch.fnmatch(basename, pattern):
-                results.append((basename, 0))
-    return results
+    entries = sftp.listdir_attr(directory)
+    return [
+        (attr.filename, getattr(attr, "st_mtime", 0))
+        for attr in entries
+        if fnmatch.fnmatch(attr.filename, pattern)
+    ]
 
 
 def _select_source(matches, policy: str):
@@ -165,27 +160,25 @@ def _select_source(matches, policy: str):
     return sorted(m[0] for m in matches)[0]
 
 
-def _download(ftp: ftplib.FTP, remote_dir: str, filename: str, local_path: Path) -> None:
+def _download(sftp: paramiko.SFTPClient, remote_dir: str, filename: str, local_path: Path) -> None:
     remote_path = f"{_normalize_dir(remote_dir)}/{filename}"
     logging.info("Downloading %s → %s", remote_path, local_path)
-    with open(local_path, "wb") as f:
-        ftp.retrbinary(f"RETR {remote_path}", f.write)
+    sftp.get(remote_path, str(local_path))
 
 
-def _upload(ftp: ftplib.FTP, remote_dir: str, filename: str, local_path: Path) -> None:
-    _ensure_dir(ftp, remote_dir)
+def _upload(sftp: paramiko.SFTPClient, remote_dir: str, filename: str, local_path: Path) -> None:
+    _ensure_dir(sftp, remote_dir)
     remote_path = f"{_normalize_dir(remote_dir)}/{filename}"
     logging.info("Uploading %s → %s", local_path, remote_path)
-    with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR {remote_path}", f)
+    sftp.put(str(local_path), remote_path)
 
 
-def _move(ftp: ftplib.FTP, src_dir: str, filename: str, dst_dir: str) -> None:
-    _ensure_dir(ftp, dst_dir)
+def _move(sftp: paramiko.SFTPClient, src_dir: str, filename: str, dst_dir: str) -> None:
+    _ensure_dir(sftp, dst_dir)
     src = f"{_normalize_dir(src_dir)}/{filename}"
     dst = f"{_normalize_dir(dst_dir)}/{filename}"
     logging.info("Moving %s → %s", src, dst)
-    ftp.rename(src, dst)
+    sftp.rename(src, dst)
 
 
 # -----------------------
@@ -234,18 +227,18 @@ def parse_and_write_csv(xml_path: Path, csv_path: Path) -> None:
 # SINGLE JOB RUNNER
 # -----------------------
 
-def run_job(ftp: ftplib.FTP, job: dict) -> None:
+def run_job(sftp: paramiko.SFTPClient, job: dict) -> None:
     src_glob = job["src_glob"]
     result_basename = job.get("result_basename", "Stock")
 
-    archive_dir = f"{_normalize_dir(FTP_SRC_DIR)}/{TRANSFORMED_SUBFOLDER}"
+    archive_dir = f"{_normalize_dir(SFTP_SRC_DIR)}/{TRANSFORMED_SUBFOLDER}"
 
-    logging.info("--- Job: %s/%s ---", FTP_SRC_DIR, src_glob)
+    logging.info("--- Job: %s/%s ---", SFTP_SRC_DIR, src_glob)
 
-    matches = _list_matching(ftp, FTP_SRC_DIR, src_glob)
+    matches = _list_matching(sftp, SFTP_SRC_DIR, src_glob)
     src_name = _select_source(matches, "latest")
     if not src_name:
-        logging.warning("No files match %s/%s — skipping job.", FTP_SRC_DIR, src_glob)
+        logging.warning("No files match %s/%s — skipping job.", SFTP_SRC_DIR, src_glob)
         return
 
     timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
@@ -257,16 +250,16 @@ def run_job(ftp: ftplib.FTP, job: dict) -> None:
         local_csv = tmpdir_path / out_name
 
         # 1. Download source XML
-        _download(ftp, FTP_SRC_DIR, src_name, local_xml)
+        _download(sftp, SFTP_SRC_DIR, src_name, local_xml)
 
         # 2. Transform XML → CSV
         parse_and_write_csv(local_xml, local_csv)
 
         # 3. Upload CSV to the same folder the XML came from
-        _upload(ftp, FTP_SRC_DIR, out_name, local_csv)
+        _upload(sftp, SFTP_SRC_DIR, out_name, local_csv)
 
         # 4. Move processed XML to TransformedXML subfolder
-        _move(ftp, FTP_SRC_DIR, src_name, archive_dir)
+        _move(sftp, SFTP_SRC_DIR, src_name, archive_dir)
 
         # Local cleanup handled by TemporaryDirectory context manager
 
@@ -278,17 +271,21 @@ def run_job(ftp: ftplib.FTP, job: dict) -> None:
 # -----------------------
 
 def main() -> None:
-    ftp = _connect()
+    client, sftp = _connect()
     try:
         for job in FEED_JOBS:
             try:
-                run_job(ftp, job)
+                run_job(sftp, job)
             except Exception as exc:
                 # Log and continue to next job rather than aborting all
-                logging.error("Job failed (%s/%s): %s", FTP_SRC_DIR, job.get("src_glob"), exc)
+                logging.error("Job failed (%s/%s): %s", SFTP_SRC_DIR, job.get("src_glob"), exc)
     finally:
         try:
-            ftp.quit()
+            sftp.close()
+        except Exception:
+            pass
+        try:
+            client.close()
         except Exception:
             pass
 

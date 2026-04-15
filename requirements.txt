@@ -1,1 +1,1 @@
-paramiko
+# No third-party packages required — ftplib is part of the Python stdlib

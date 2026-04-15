@@ -18,13 +18,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
       - name: Run pipeline
         env:
-          VAX_SFTP_HOST: ${{ secrets.VAX_SFTP_HOST }}
-          VAX_SFTP_PORT: ${{ secrets.VAX_SFTP_PORT }}
-          VAX_SFTP_USER: ${{ secrets.VAX_SFTP_USER }}
-          VAX_SFTP_PASS: ${{ secrets.VAX_SFTP_PASS }}
+          VAX_FTP_HOST: ${{ secrets.VAX_FTP_HOST }}
+          VAX_FTP_PORT: ${{ secrets.VAX_FTP_PORT }}
+          VAX_FTP_USER: ${{ secrets.VAX_FTP_USER }}
+          VAX_FTP_PASS: ${{ secrets.VAX_FTP_PASS }}
         run: python sftp_xml_to_csv_pipeline_vax.py

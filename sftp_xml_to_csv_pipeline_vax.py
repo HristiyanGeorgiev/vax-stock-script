@@ -54,7 +54,7 @@ import paramiko
 # Nothing sensitive is hardcoded here. The script will exit immediately with a
 # clear error if a required variable is missing.
 
-def _require_env(name: Vax) -> Vax:
+def _require_env(name: str) -> str:
     val = os.getenv(name, "")
     if not val:
         raise SystemExit(f"ERROR: required environment variable '{name}' is not set.")

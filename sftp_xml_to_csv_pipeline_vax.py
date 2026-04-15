@@ -60,10 +60,10 @@ def _require_env(name: str) -> str:
     return val
 
 # FTP connection — set these as GitHub Secrets (or .env locally)
-FTP_HOST = _require_env("VAX_FTP_HOST")
-FTP_PORT = int(os.getenv("VAX_FTP_PORT", "21"))   # optional, defaults to 21
-FTP_USER = _require_env("VAX_FTP_USER")
-FTP_PASS = _require_env("VAX_FTP_PASS")
+FTP_HOST = _require_env("VAX_SFTP_HOST")
+FTP_PORT = int(os.getenv("VAX_SFTP_PORT", "21"))   # optional, defaults to 21
+FTP_USER = _require_env("VAX_SFTP_USER")
+FTP_PASS = _require_env("VAX_SFTP_PASS")
 
 # -----------------------------------------------------------------------
 # FEED JOBS

@@ -68,29 +68,18 @@ SFTP_PASS = _require_env("VAX_SFTP_PASS")
 
 # -----------------------------------------------------------------------
 # FEED JOBS
-# Each entry defines one independent ingestion job.
-# Add or remove entries to handle more folders/files on the same SFTP.
+# All jobs read from the same SFTP folder (SFTP_SRC_DIR).
+# Each entry picks a different file pattern within that folder.
 #
 # Fields per job:
-#   src_dir       - SFTP folder to look for the source XML
-#   src_glob      - filename pattern (wildcards supported, e.g. "stock-*.xml")
-#   select_policy - "latest" (by mtime) or "first" (alphabetical)
+#   src_glob        - filename pattern (wildcards ok, e.g. "stock-34-*.xml")
 #   result_basename - base name for the output CSV (timestamp will be appended)
 # -----------------------------------------------------------------------
+SFTP_SRC_DIR = "/feeds/vax"
+
 FEED_JOBS = [
-    {
-        "src_dir": "/feeds/vax/store34",
-        "src_glob": "stock-34-*.xml",
-        "select_policy": "latest",
-        "result_basename": "Stock_34",
-    },
-    # Add more jobs here, for example:
-    # {
-    #     "src_dir": "/feeds/vax/store99",
-    #     "src_glob": "stock-99-*.xml",
-    #     "select_policy": "latest",
-    #     "result_basename": "Stock_99",
-    # },
+    {"src_glob": "stock-34-*.xml", "result_basename": "Stock_34"},
+    # {"src_glob": "stock-45-*.xml", "result_basename": "Stock_45"},
 ]
 
 # Subfolder name within each src_dir where processed XMLs are archived
@@ -239,19 +228,17 @@ def parse_and_write_csv(xml_path: Path, csv_path: Path) -> None:
 # -----------------------
 
 def run_job(sftp: paramiko.SFTPClient, job: dict) -> None:
-    src_dir = job["src_dir"]
     src_glob = job["src_glob"]
-    select_policy = job.get("select_policy", "latest")
     result_basename = job.get("result_basename", "Stock")
 
-    archive_dir = f"{_normalize_dir(src_dir)}/{TRANSFORMED_SUBFOLDER}"
+    archive_dir = f"{_normalize_dir(SFTP_SRC_DIR)}/{TRANSFORMED_SUBFOLDER}"
 
-    logging.info("--- Job: %s/%s ---", src_dir, src_glob)
+    logging.info("--- Job: %s/%s ---", SFTP_SRC_DIR, src_glob)
 
-    matches = _list_matching(sftp, src_dir, src_glob)
-    src_name = _select_source(matches, select_policy)
+    matches = _list_matching(sftp, SFTP_SRC_DIR, src_glob)
+    src_name = _select_source(matches, "latest")
     if not src_name:
-        logging.warning("No files match %s/%s — skipping job.", src_dir, src_glob)
+        logging.warning("No files match %s/%s — skipping job.", SFTP_SRC_DIR, src_glob)
         return
 
     timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
@@ -263,20 +250,20 @@ def run_job(sftp: paramiko.SFTPClient, job: dict) -> None:
         local_csv = tmpdir_path / out_name
 
         # 1. Download source XML
-        _download(sftp, src_dir, src_name, local_xml)
+        _download(sftp, SFTP_SRC_DIR, src_name, local_xml)
 
         # 2. Transform XML → CSV
         parse_and_write_csv(local_xml, local_csv)
 
         # 3. Upload CSV to the same folder the XML came from
-        _upload(sftp, src_dir, out_name, local_csv)
+        _upload(sftp, SFTP_SRC_DIR, out_name, local_csv)
 
         # 4. Move processed XML to TransformedXML subfolder
-        _move(sftp, src_dir, src_name, archive_dir)
+        _move(sftp, SFTP_SRC_DIR, src_name, archive_dir)
 
         # Local cleanup handled by TemporaryDirectory context manager
 
-    logging.info("Job done: %s", src_dir)
+    logging.info("Job done: %s", src_glob)
 
 
 # -----------------------
@@ -291,7 +278,7 @@ def main() -> None:
                 run_job(sftp, job)
             except Exception as exc:
                 # Log and continue to next job rather than aborting all
-                logging.error("Job failed (%s/%s): %s", job.get("src_dir"), job.get("src_glob"), exc)
+                logging.error("Job failed (%s/%s): %s", SFTP_SRC_DIR, job.get("src_glob"), exc)
     finally:
         try:
             sftp.close()

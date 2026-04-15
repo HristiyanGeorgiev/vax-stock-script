@@ -61,12 +61,10 @@ def _require_env(name: str) -> str:
     return val
 
 # SFTP connection — set these as GitHub Secrets (or .env locally)
-SFTP_HOST = _require_env("SFTP_HOST")
-SFTP_PORT = int(os.getenv("SFTP_PORT", "22"))   # optional, defaults to 22
-SFTP_USER = _require_env("SFTP_USER")
-SFTP_PASS = os.getenv("SFTP_PASS", "")          # optional if using key auth
-SFTP_KEY_PATH = os.getenv("SFTP_KEY_PATH", "")            # path to private key (optional)
-SFTP_KEY_PASSPHRASE = os.getenv("SFTP_KEY_PASSPHRASE", "") # optional
+SFTP_HOST = _require_env("VAX_SFTP_HOST")
+SFTP_PORT = int(os.getenv("VAX_SFTP_PORT", "22"))   # optional, defaults to 22
+SFTP_USER = _require_env("VAX_SFTP_USER")
+SFTP_PASS = _require_env("VAX_SFTP_PASS")
 
 # -----------------------------------------------------------------------
 # FEED JOBS
@@ -111,25 +109,17 @@ logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(mes
 # -----------------------
 
 def _connect():
-    """Connect to SFTP using Paramiko; supports password or key auth."""
+    """Connect to SFTP using Paramiko with password authentication."""
     logging.info("Connecting to SFTP %s:%s as %s", SFTP_HOST, SFTP_PORT, SFTP_USER)
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    pkey = None
-    if SFTP_KEY_PATH:
-        pkey = paramiko.RSAKey.from_private_key_file(
-            SFTP_KEY_PATH, password=SFTP_KEY_PASSPHRASE or None
-        )
-
     client.connect(
         hostname=SFTP_HOST,
         port=SFTP_PORT,
         username=SFTP_USER,
-        password=SFTP_PASS or None,
-        pkey=pkey,
-        look_for_keys=not bool(SFTP_KEY_PATH),
-        allow_agent=True,
+        password=SFTP_PASS,
+        look_for_keys=False,
+        allow_agent=False,
         timeout=60,
     )
     sftp = client.open_sftp()

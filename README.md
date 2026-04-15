@@ -1,0 +1,1 @@
+This script connects to an sFTP and picks a xml stock file which then gets transfors to a .csv file and moves it to a specific folder. The transformed csv file is then picked by Hemi to import stock for one of our customers.

@@ -75,7 +75,7 @@ SFTP_PASS = _require_env("VAX_SFTP_PASS")
 #   src_glob        - filename pattern (wildcards ok, e.g. "stock-34-*.xml")
 #   result_basename - base name for the output CSV (timestamp will be appended)
 # -----------------------------------------------------------------------
-SFTP_SRC_DIR = "/feeds/vax"
+SFTP_SRC_DIR = "/Magento/Stock"
 
 FEED_JOBS = [
     {"src_glob": "stock-34-*.xml", "result_basename": "Stock_34"},

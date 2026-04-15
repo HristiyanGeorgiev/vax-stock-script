@@ -27,8 +27,4 @@ For each job defined in `FEED_JOBS`:
     </Product>
   </Products>
 </Feed>
-```
-export VAX_SFTP_PASS=mypassword
 
-python sftp_xml_to_csv_pipeline_vax.py
-```

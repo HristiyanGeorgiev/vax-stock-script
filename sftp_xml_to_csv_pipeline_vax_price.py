@@ -82,7 +82,7 @@ FEED_JOBS = [
 TRANSFORMED_SUBFOLDER = "TransformedXML"
 # Subfolder where XMLs that failed processing are quarantined
 ERROR_SUBFOLDER = "Error"
-TIMESTAMP_FORMAT = "%Y_%m_%d_%M_%S"  # YYYY_MM_DD_MI_SS
+TIMESTAMP_FORMAT = "%Y_%m_%d_%H_%M_%S"  # YYYY_MM_DD_HH_MI_SS
 CSV_HEADER = ["sku", "RRP", "sellingPrice"]
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

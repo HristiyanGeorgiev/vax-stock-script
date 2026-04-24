@@ -1,0 +1,28 @@
+name: VAX Price Pipeline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          VAX_SFTP_HOST: ${{ secrets.VAX_SFTP_HOST }}
+          VAX_SFTP_PORT: ${{ secrets.VAX_SFTP_PORT }}
+          VAX_SFTP_USER: ${{ secrets.VAX_SFTP_USER }}
+          VAX_SFTP_PASS: ${{ secrets.VAX_SFTP_PASS }}
+        run: python sftp_xml_to_csv_pipeline_vax_price.py
